@@ -1,4 +1,4 @@
-name: Build job market paper from Overleaf
+name: Build Auditing from Below from Overleaf
 
 # Pulls the paper straight from Overleaf's git endpoint, compiles it, and publishes
 # Auditing_from_Below.pdf. Runs hourly but only rebuilds when the Overleaf project changed.
@@ -77,5 +77,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$OUT" .jmp-source-sha
-          git diff --staged --quiet || git commit -m "Auto-compile job market paper from Overleaf"
+          git diff --staged --quiet || git commit -m "Auto-compile Auditing from Below from Overleaf"
           git push
