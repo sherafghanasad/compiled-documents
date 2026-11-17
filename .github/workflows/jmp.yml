@@ -1,0 +1,81 @@
+name: Build job market paper from Overleaf
+
+# Pulls the paper straight from Overleaf's git endpoint, compiles it, and publishes
+# Auditing_from_Below.pdf. Runs hourly but only rebuilds when the Overleaf project changed.
+# Needs two repository secrets:
+#   OVERLEAF_TOKEN       Overleaf > Account Settings > Git Integration > Create token
+#   OVERLEAF_PROJECT_ID  the id in the project's URL: overleaf.com/project/<id>
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jmp
+  cancel-in-progress: false
+
+env:
+  OUT: Auditing_from_Below.pdf
+  ROOT: paper
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Overleaf for changes
+        id: check
+        env:
+          OVERLEAF_TOKEN: ${{ secrets.OVERLEAF_TOKEN }}
+          OVERLEAF_PROJECT_ID: ${{ secrets.OVERLEAF_PROJECT_ID }}
+        run: |
+          if [ -z "$OVERLEAF_TOKEN" ] || [ -z "$OVERLEAF_PROJECT_ID" ]; then
+            echo "Overleaf secrets not set; nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          url="https://git:${OVERLEAF_TOKEN}@git.overleaf.com/${OVERLEAF_PROJECT_ID}"
+          sha=$(git ls-remote "$url" HEAD | cut -f1)
+          [ -n "$sha" ] || { echo "Could not read the Overleaf project."; exit 1; }
+          if [ "$sha" = "$(cat .jmp-source-sha 2>/dev/null)" ] && [ -f "$OUT" ]; then
+            echo "No change on Overleaf."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git clone --quiet --depth 1 "$url" "$GITHUB_WORKSPACE/overleaf-src"
+            rm -rf "$GITHUB_WORKSPACE/overleaf-src/.git"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compile
+        if: steps.check.outputs.changed == 'true'
+        uses: xu-cheng/latex-action@v3
+        with:
+          working_directory: overleaf-src
+          root_file: ${{ env.ROOT }}.tex
+
+      # The paper's own rule: a draft with \todo{} left in it is not circulated.
+      - name: Refuse drafts with open TODOs
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          sudo apt-get install -y -qq poppler-utils >/dev/null
+          if pdftotext "overleaf-src/$ROOT.pdf" - | grep -q "\[TODO:"; then
+            echo "::error::Draft contains [TODO: ...] markers; keeping the previously published PDF."
+            exit 1
+          fi
+
+      - name: Publish
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          cp "overleaf-src/$ROOT.pdf" "$OUT"
+          echo "${{ steps.check.outputs.sha }}" > .jmp-source-sha
+          sudo rm -rf overleaf-src
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$OUT" .jmp-source-sha
+          git diff --staged --quiet || git commit -m "Auto-compile job market paper from Overleaf"
+          git push
